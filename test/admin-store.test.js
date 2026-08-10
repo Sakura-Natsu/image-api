@@ -80,6 +80,34 @@ test("客户日志会脱敏提示词、IP 和 key 信息", async () => {
   assert.equal(logs[0].usage.inputImageTokens, 20);
 });
 
+test("请求日志支持按成功和出错状态筛选", async () => {
+  const store = await makeStore();
+  const result = await store.createKey({ name: "测试客户" });
+
+  await store.recordRequest({
+    keyId: result.key.id,
+    keyName: result.key.name,
+    endpoint: "/v1/images/edits",
+    statusCode: 200,
+    costUsd: 0.01
+  });
+  await store.recordRequest({
+    keyId: result.key.id,
+    keyName: result.key.name,
+    endpoint: "/v1/images/generations",
+    statusCode: 429,
+    costUsd: 0
+  });
+
+  const successLogs = await store.listLogs({ status: "success" });
+  const errorLogs = await store.listCustomerLogs(result.key.id, { status: "error" });
+
+  assert.equal(successLogs.length, 1);
+  assert.equal(successLogs[0].statusCode, 200);
+  assert.equal(errorLogs.length, 1);
+  assert.equal(errorLogs[0].statusCode, 429);
+});
+
 test("客户汇总不会返回 key 前缀", async () => {
   const store = await makeStore();
   const result = await store.createKey({ name: "测试客户" });

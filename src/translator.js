@@ -64,12 +64,6 @@ function mapModel(model, gatewayConfig) {
   return gatewayConfig.modelAliases[modelName] || modelName;
 }
 
-function assertStreamingDisabled(body) {
-  if (body.stream === true) {
-    throw new HttpError(400, "当前网关暂不支持图片流式响应，请设置 stream=false", { param: "stream" });
-  }
-}
-
 async function imageUrlToPublicUrl(value, context) {
   if (typeof value !== "string") {
     throw new HttpError(400, "image_url 必须是字符串", { param: "image_url" });
@@ -195,27 +189,34 @@ function collectMaskFile(files = []) {
   return files.find((file) => file.fieldname === "mask");
 }
 
+function removeNonStreamingCompatibilityFields(body) {
+  if (body.stream === true) {
+    return body;
+  }
+
+  const { stream, partial_images, ...rest } = body;
+  return rest;
+}
+
 function removeEditOnlyCompatibilityFields(body) {
   const {
     image,
     image_url,
     images,
     response_format,
-    stream,
     mask,
     ...rest
   } = body;
-  return rest;
+  return removeNonStreamingCompatibilityFields(rest);
 }
 
 function removeGenerationCompatibilityFields(body) {
-  const { response_format, stream, ...rest } = body;
-  return rest;
+  const { response_format, ...rest } = body;
+  return removeNonStreamingCompatibilityFields(rest);
 }
 
 export async function normalizeImageEditRequest({ body: rawBody, files, storage, baseUrl, gatewayConfig }) {
   const body = normalizeBody(rawBody);
-  assertStreamingDisabled(body);
 
   const context = { storage, baseUrl, kind: "input" };
   const imageReferences = [];
@@ -258,7 +259,6 @@ export async function normalizeImageEditRequest({ body: rawBody, files, storage,
 
 export function normalizeImageGenerationRequest({ body: rawBody, gatewayConfig }) {
   const body = normalizeBody(rawBody);
-  assertStreamingDisabled(body);
 
   if (!body.prompt || typeof body.prompt !== "string") {
     throw new HttpError(400, "图片生成请求必须包含 prompt", { param: "prompt" });

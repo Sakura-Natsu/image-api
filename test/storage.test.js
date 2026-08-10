@@ -74,3 +74,28 @@ test("单张图片超过总容量限制时拒绝保存", async () => {
     /超过临时图床总容量限制/
   );
 });
+
+test("参考素材允许保存 MP4，普通图片存储仍拒绝视频", async () => {
+  const { storage } = await makeStorage();
+  const buffer = Buffer.concat([
+    Buffer.from([0x00, 0x00, 0x00, 0x18]),
+    Buffer.from("ftypisom", "ascii"),
+    Buffer.alloc(32)
+  ]);
+
+  await assert.rejects(
+    () => storage.saveBuffer({ buffer, mimeType: "video/mp4", baseUrl: "https://gateway.example.com", kind: "input" }),
+    /仅支持图片文件/
+  );
+
+  const saved = await storage.saveBuffer({
+    buffer,
+    mimeType: "video/mp4",
+    baseUrl: "https://gateway.example.com",
+    kind: "reference",
+    allowVideo: true
+  });
+
+  assert.equal(saved.mimeType, "video/mp4");
+  assert.match(saved.url, /^https:\/\/gateway\.example\.com\/uploads\/reference-.*\.mp4$/);
+});

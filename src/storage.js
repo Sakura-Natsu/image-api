@@ -8,8 +8,23 @@ const MIME_TO_EXTENSION = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
-  "image/gif": "gif"
+  "image/gif": "gif",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+  "video/mpeg": "mpeg"
 };
+
+const SUPPORTED_REFERENCE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/mpeg"
+]);
 
 function detectMime(buffer, fallbackMimeType) {
   if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
@@ -33,6 +48,25 @@ function detectMime(buffer, fallbackMimeType) {
     if (signature === "GIF87a" || signature === "GIF89a") {
       return "image/gif";
     }
+  }
+
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = buffer.subarray(8, 12).toString("ascii").toLowerCase();
+    return brand === "qt  " ? "video/quicktime" : "video/mp4";
+  }
+
+  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+    return "video/webm";
+  }
+
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x00 &&
+    buffer[1] === 0x00 &&
+    buffer[2] === 0x01 &&
+    (buffer[3] === 0xba || buffer[3] === 0xb3)
+  ) {
+    return "video/mpeg";
   }
 
   if (fallbackMimeType?.startsWith("image/")) {
@@ -97,7 +131,7 @@ export function parseRawBase64Image(value) {
   return { buffer, mimeType: detectMime(buffer, "image/png") };
 }
 
-export function createStorage(storageConfig) {
+function createLocalStorage(storageConfig) {
   const storageDir = storageConfig.storageDir;
   const fileRoutePrefix = storageConfig.fileRoutePrefix;
   const maxUploadBytes = storageConfig.maxUploadBytes;
@@ -193,22 +227,23 @@ export function createStorage(storageConfig) {
     return cleanupExpired();
   }
 
-  async function saveBuffer({ buffer, mimeType, baseUrl, kind = "input" }) {
+  async function saveBuffer({ buffer, mimeType, baseUrl, kind = "input", allowVideo = false }) {
     if (!Buffer.isBuffer(buffer)) {
-      throw new HttpError(400, "图片内容必须是二进制 Buffer");
+      throw new HttpError(400, "文件内容必须是二进制 Buffer");
     }
 
     if (buffer.length > maxUploadBytes) {
-      throw new HttpError(400, `单张图片不能超过 ${maxUploadBytes} 字节`);
+      throw new HttpError(400, `单个文件不能超过 ${maxUploadBytes} 字节`);
     }
 
     if (maxStorageBytes > 0 && buffer.length > maxStorageBytes) {
-      throw new HttpError(507, "单张图片超过临时图床总容量限制");
+      throw new HttpError(507, "单个文件超过临时图床总容量限制");
     }
 
     const detectedMimeType = detectMime(buffer, mimeType);
-    if (!detectedMimeType.startsWith("image/")) {
-      throw new HttpError(400, "仅支持图片文件");
+    const allowed = detectedMimeType.startsWith("image/") || (allowVideo && detectedMimeType.startsWith("video/"));
+    if (!allowed || !SUPPORTED_REFERENCE_MIME_TYPES.has(detectedMimeType)) {
+      throw new HttpError(400, allowVideo ? "仅支持 PNG、JPEG、WebP、GIF、MP4、WebM、MOV 或 MPEG 文件" : "仅支持图片文件");
     }
 
     await ensureReady();
@@ -248,4 +283,92 @@ export function createStorage(storageConfig) {
     cleanupExpired,
     startCleanupTimer
   };
+}
+
+function normalizeBlobPrefix(value) {
+  return String(value || "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+}
+
+function buildBlobPath(storageConfig, fileName) {
+  const prefix = normalizeBlobPrefix(storageConfig.blobPrefix);
+  return prefix ? `${prefix}/${fileName}` : fileName;
+}
+
+async function loadBlobPut() {
+  try {
+    const { put } = await import("@vercel/blob");
+    return put;
+  } catch (error) {
+    if (error.code === "ERR_MODULE_NOT_FOUND") {
+      throw new HttpError(500, "缺少 @vercel/blob 依赖，无法使用 Vercel Blob 存储");
+    }
+    throw error;
+  }
+}
+
+function createVercelBlobStorage(storageConfig) {
+  const maxUploadBytes = storageConfig.maxUploadBytes;
+
+  async function ensureReady() {
+    return null;
+  }
+
+  async function cleanupExpired() {
+    return null;
+  }
+
+  async function saveBuffer({ buffer, mimeType, kind = "input", allowVideo = false }) {
+    if (!Buffer.isBuffer(buffer)) {
+      throw new HttpError(400, "文件内容必须是二进制 Buffer");
+    }
+
+    if (buffer.length > maxUploadBytes) {
+      throw new HttpError(400, `单个文件不能超过 ${maxUploadBytes} 字节`);
+    }
+
+    const detectedMimeType = detectMime(buffer, mimeType);
+    const allowed = detectedMimeType.startsWith("image/") || (allowVideo && detectedMimeType.startsWith("video/"));
+    if (!allowed || !SUPPORTED_REFERENCE_MIME_TYPES.has(detectedMimeType)) {
+      throw new HttpError(400, allowVideo ? "仅支持 PNG、JPEG、WebP、GIF、MP4、WebM、MOV 或 MPEG 文件" : "仅支持图片文件");
+    }
+
+    const put = await loadBlobPut();
+    const fileName = `${kind}-${Date.now()}-${randomUUID()}.${extensionForMime(detectedMimeType)}`;
+    const blobPath = buildBlobPath(storageConfig, fileName);
+    const blob = await put(blobPath, buffer, {
+      access: "public",
+      addRandomSuffix: false,
+      cacheControlMaxAge: storageConfig.blobCacheControlMaxAgeSeconds,
+      contentType: detectedMimeType
+    });
+
+    return {
+      url: blob.url,
+      fileName,
+      filePath: blob.pathname || blobPath,
+      mimeType: detectedMimeType,
+      size: buffer.length
+    };
+  }
+
+  function startCleanupTimer() {
+    return null;
+  }
+
+  return {
+    ensureReady,
+    saveBuffer,
+    cleanupExpired,
+    startCleanupTimer
+  };
+}
+
+export function createStorage(storageConfig) {
+  if (storageConfig.storageProvider === "vercel-blob") {
+    return createVercelBlobStorage(storageConfig);
+  }
+
+  return createLocalStorage(storageConfig);
 }

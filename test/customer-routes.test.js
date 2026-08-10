@@ -99,6 +99,43 @@ test("客户用量接口只能用客户 key，且返回脱敏日志", async () =
   }
 });
 
+test("客户日志接口支持按成功和出错请求筛选", async () => {
+  const server = await makeServer();
+
+  try {
+    const created = await server.adminStore.createKey({ name: "客户 A" });
+    await server.adminStore.recordRequest({
+      keyId: created.key.id,
+      keyName: "客户 A",
+      endpoint: "/v1/images/edits",
+      statusCode: 200,
+      costUsd: 0.01
+    });
+    await server.adminStore.recordRequest({
+      keyId: created.key.id,
+      keyName: "客户 A",
+      endpoint: "/v1/images/generations",
+      statusCode: 500,
+      costUsd: 0,
+      errorDetail: "upstream error"
+    });
+
+    const successResponse = await fetch(`${server.url}/usage/api/logs?status=success`, {
+      headers: { authorization: `Bearer ${created.apiKey}` }
+    });
+    const errorResponse = await fetch(`${server.url}/usage/api/logs?status=error`, {
+      headers: { authorization: `Bearer ${created.apiKey}` }
+    });
+
+    assert.equal(successResponse.status, 200);
+    assert.equal(errorResponse.status, 200);
+    assert.deepEqual((await successResponse.json()).map((log) => log.statusCode), [200]);
+    assert.deepEqual((await errorResponse.json()).map((log) => log.statusCode), [500]);
+  } finally {
+    await server.close();
+  }
+});
+
 test("公开页面不暴露上游配置，客户页不包含健康检查入口和本地 key 持久化", async () => {
   const server = await makeServer();
 

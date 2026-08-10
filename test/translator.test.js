@@ -114,6 +114,26 @@ test("file_id 会返回明确错误，避免误传给只支持 URL 的上游", a
   );
 });
 
+test("非流式图片编辑请求会移除 partial_images", async () => {
+  const context = await makeTestContext();
+
+  const result = await normalizeImageEditRequest({
+    body: {
+      images: [{ image_url: `data:image/png;base64,${PNG_1X1_BASE64}` }],
+      prompt: "生成一张图",
+      stream: "false",
+      partial_images: "2"
+    },
+    files: [],
+    storage: context.storage,
+    baseUrl: context.baseUrl,
+    gatewayConfig: context.gatewayConfig
+  });
+
+  assert.equal(result.upstreamBody.stream, undefined);
+  assert.equal(result.upstreamBody.partial_images, undefined);
+});
+
 test("图片生成请求会设置默认模型并保留官方参数", () => {
   const gatewayConfig = {
     defaultImageModel: "gpt-image-2",
@@ -135,4 +155,44 @@ test("图片生成请求会设置默认模型并保留官方参数", () => {
   assert.equal(result.upstreamBody.n, 1);
   assert.equal(result.upstreamBody.response_format, undefined);
   assert.equal(result.responseFormat, "url");
+});
+
+test("非流式图片生成请求会移除 partial_images", () => {
+  const gatewayConfig = {
+    defaultImageModel: "gpt-image-2",
+    modelAliases: {},
+    maxImages: 16
+  };
+
+  const result = normalizeImageGenerationRequest({
+    body: {
+      prompt: "白底产品图",
+      stream: "false",
+      partial_images: "2"
+    },
+    gatewayConfig
+  });
+
+  assert.equal(result.upstreamBody.stream, undefined);
+  assert.equal(result.upstreamBody.partial_images, undefined);
+});
+
+test("流式图片生成请求会保留 stream 和 partial_images", () => {
+  const gatewayConfig = {
+    defaultImageModel: "gpt-image-2",
+    modelAliases: {},
+    maxImages: 16
+  };
+
+  const result = normalizeImageGenerationRequest({
+    body: {
+      prompt: "白底产品图",
+      stream: "true",
+      partial_images: "1"
+    },
+    gatewayConfig
+  });
+
+  assert.equal(result.upstreamBody.stream, true);
+  assert.equal(result.upstreamBody.partial_images, 1);
 });

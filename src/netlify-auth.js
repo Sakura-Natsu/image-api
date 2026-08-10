@@ -19,12 +19,12 @@ function openAiUpstreamAuthError(status, message, type = "upstream_auth_error") 
   });
 }
 
-function normalizeGatewayBaseUrl(payload, gatewayConfig) {
+function normalizeGatewayBaseUrl(payload, gatewayConfig, apiPrefix) {
   if (payload.gatewayUrl && typeof payload.gatewayUrl === "string") {
-    return joinUrl(payload.gatewayUrl, "v1");
+    return joinUrl(payload.gatewayUrl, apiPrefix);
   }
 
-  return gatewayConfig.upstreamBaseUrl;
+  return apiPrefix === "api/v1" ? gatewayConfig.openRouterBaseUrl : gatewayConfig.upstreamBaseUrl;
 }
 
 async function parseJsonResponse(response) {
@@ -70,7 +70,7 @@ export function createNetlifyAuthResolver({ fetchImpl = globalThis.fetch, now = 
       }
 
       cachedTarget = {
-        baseUrl: normalizeGatewayBaseUrl(payload, gatewayConfig),
+        gatewayUrl: typeof payload.gatewayUrl === "string" ? trimTrailingSlash(payload.gatewayUrl) : "",
         apiKey: payload.gatewayKey,
         fetchedAt: now(),
         source: "netlify"
@@ -104,7 +104,10 @@ export function createNetlifyAuthResolver({ fetchImpl = globalThis.fetch, now = 
 
     const currentTime = now();
     if (cachedTarget && currentTime - cachedTarget.fetchedAt < gatewayConfig.netlifyKeyTtlMs) {
-      return cachedTarget;
+      return {
+        ...cachedTarget,
+        baseUrl: normalizeGatewayBaseUrl(cachedTarget, gatewayConfig, "v1")
+      };
     }
 
     if (!pendingRefresh) {
@@ -113,7 +116,42 @@ export function createNetlifyAuthResolver({ fetchImpl = globalThis.fetch, now = 
       });
     }
 
-    return pendingRefresh;
+    const target = await pendingRefresh;
+    return {
+      ...target,
+      baseUrl: normalizeGatewayBaseUrl(target, gatewayConfig, "v1")
+    };
+  }
+
+  async function resolveOpenRouter(gatewayConfig) {
+    if (!gatewayConfig.netlifyUrl) {
+      if (!gatewayConfig.openRouterBaseUrl) {
+        throw openAiUpstreamAuthError(500, "未配置 OPENROUTER_BASE_URL，无法转发 OpenRouter 请求");
+      }
+
+      return {
+        baseUrl: gatewayConfig.openRouterBaseUrl,
+        apiKey: gatewayConfig.openRouterApiKey,
+        fetchedAt: null,
+        source: "static"
+      };
+    }
+
+    const currentTime = now();
+    let target = cachedTarget;
+    if (!target || currentTime - target.fetchedAt >= gatewayConfig.netlifyKeyTtlMs) {
+      if (!pendingRefresh) {
+        pendingRefresh = refresh(gatewayConfig).finally(() => {
+          pendingRefresh = null;
+        });
+      }
+      target = await pendingRefresh;
+    }
+
+    return {
+      ...target,
+      baseUrl: normalizeGatewayBaseUrl(target, gatewayConfig, "api/v1")
+    };
   }
 
   function clear() {
@@ -123,6 +161,7 @@ export function createNetlifyAuthResolver({ fetchImpl = globalThis.fetch, now = 
 
   return {
     resolve,
+    resolveOpenRouter,
     clear
   };
 }

@@ -11,6 +11,7 @@
   - 可选 `mask` 文件或 `{ "image_url": "data:..." }`
 - 兼容 `POST /v1/images/generations`
 - 临时图床：默认保存到 `data/uploads`，通过 `/uploads/<文件名>` 访问
+- 参考素材上传：`POST /api/v1/assets` 接受单个图片或视频 multipart 文件，返回供 OpenRouter 视频生成使用的公开 HTTPS URL
 - 可选鉴权：设置 `GATEWAY_API_KEY` 后，客户端必须使用 `Authorization: Bearer ...`
 - 可选输出 URL：客户端传 `response_format=url` 时，网关会把上游返回的 `b64_json` 保存成临时图片并返回 `url`
 - 管理台：`/admin` 支持客户 key 分发、启停、删除、请求日志、本月用量和预算控制
@@ -109,6 +110,58 @@ const result = await client.images.edit({
 console.log(result.data[0].b64_json);
 ```
 
+## OpenRouter 原生 API 透传
+
+配置 `NETLIFY_URL` 后，可以通过本服务的 `/api/v1/*` 路径直接访问 Netlify AI Gateway 新增的 OpenRouter 原生端点。请求体和查询参数不会被改写，支持普通 JSON、SSE 流式响应以及视频等二进制响应。视频任务响应中的 `polling_url` 和 `unsigned_urls` 会自动改写成 `PUBLIC_BASE_URL/api/v1/videos/...`，客户端可以继续使用本服务的客户 key 查询和下载，不需要接触 Netlify 动态 key。
+
+```bash
+curl http://localhost:3000/api/v1/chat/completions \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "inclusionai/ling-2.6-flash",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+视频生成使用 OpenRouter 的异步接口：
+
+```bash
+# 提交任务
+curl http://localhost:3000/api/v1/videos \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bytedance/seedance-2.5",
+    "prompt": "A red paper boat floating on a calm pond",
+    "duration": 4,
+    "resolution": "480p",
+    "aspect_ratio": "1:1",
+    "generate_audio": false
+  }'
+
+# 查询任务
+curl http://localhost:3000/api/v1/videos/JOB_ID \
+  -H "Authorization: Bearer $GATEWAY_API_KEY"
+
+# 下载视频
+curl http://localhost:3000/api/v1/videos/JOB_ID/content?index=0 \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  --output output.mp4
+```
+
+该前缀支持 `GET` 和 `POST`，例如模型目录可以通过 `GET /api/v1/models` 或 `GET /api/v1/videos/models` 获取。未配置 `NETLIFY_URL` 的静态模式需要设置 `OPENROUTER_BASE_URL` 和 `OPENROUTER_API_KEY`。
+
+参考图片或视频应先使用 multipart 上传到临时存储，避免把大文件编码为 base64 后触发上游请求体限制：
+
+```bash
+curl http://localhost:3000/api/v1/assets \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -F "file=@reference.mp4"
+```
+
+响应中的 `url` 可直接用于视频生成请求的 `input_references[].image_url.url` 或 `input_references[].video_url.url`。本地存储沿用 `TEMP_FILE_TTL_SECONDS`、`MAX_STORAGE_BYTES` 和 `MAX_STORED_FILES` 清理策略。
+
 ## curl 示例
 
 multipart 上传：
@@ -163,6 +216,8 @@ curl http://localhost:3000/v1/images/generations \
 | `NETLIFY_CONFIG_TIMEOUT_SECONDS` | `15` | 请求 `/api/config` 的超时时间 |
 | `UPSTREAM_BASE_URL` | 示例 Netlify 地址 | 上游 OpenAI 兼容接口根路径，不含末尾 `/` |
 | `UPSTREAM_API_KEY` | 空 | 静态上游模式使用，会以 `Authorization: Bearer ...` 转发 |
+| `OPENROUTER_BASE_URL` | 根据 `NETLIFY_URL` 自动生成 | OpenRouter 原生 API 根路径；静态模式通常为 `https://openrouter.ai/api/v1` |
+| `OPENROUTER_API_KEY` | 空 | OpenRouter 静态模式 API key；动态 Netlify 模式复用 `gatewayKey` |
 | `PUBLIC_BASE_URL` | 空 | 临时图片公网根地址 |
 | `GATEWAY_API_KEY` | 空 | 网关自己的访问密钥 |
 | `ADMIN_USERNAME` | `admin` | 管理台 Basic Auth 用户名 |
@@ -172,12 +227,14 @@ curl http://localhost:3000/v1/images/generations \
 | `MAX_LOG_ENTRIES` | `5000` | 本地最多保留的请求日志数量 |
 | `DEFAULT_IMAGE_MODEL` | `gpt-image-2` | 客户端未传模型时使用 |
 | `MODEL_ALIASES` | `{}` | JSON 对象，做模型名映射 |
-| `STORAGE_DIR` | `data/uploads` | 临时图片保存目录 |
-| `FILE_ROUTE_PREFIX` | `/uploads` | 临时图片访问路径前缀 |
-| `TEMP_FILE_TTL_SECONDS` | `86400` | 临时图片保留时间 |
-| `MAX_UPLOAD_BYTES` | `20mb` | 单张输入图片大小上限 |
+| `STORAGE_DIR` | `data/uploads` | 临时图片和参考视频保存目录 |
+| `FILE_ROUTE_PREFIX` | `/uploads` | 临时素材访问路径前缀 |
+| `TEMP_FILE_TTL_SECONDS` | `86400` | 临时素材保留时间 |
+| `MAX_UPLOAD_BYTES` | `20mb` | 单个输入图片或参考视频大小上限 |
 | `MAX_STORAGE_BYTES` | `10gb` | 临时图床目录最大容量，超过后删除最旧文件；设为 `0` 表示不按容量限制 |
 | `MAX_STORED_FILES` | `5000` | 临时图床最多保留文件数，超过后删除最旧文件；设为 `0` 表示不按数量限制 |
 | `MAX_IMAGES` | `16` | 单次编辑最多参考图数量 |
 | `BODY_LIMIT` | `30mb` | JSON 请求体大小上限 |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | 调用上游超时时间 |
+| `UPSTREAM_RETRY_ATTEMPTS` | `1` | 上游瞬时网络错误重试次数，仅重试 `ECONNRESET`、`ETIMEDOUT`、`EAI_AGAIN` |
+| `UPSTREAM_RETRY_DELAY_MS` | `1000` | 上游重试基础等待时间，后续重试按次数线性增加 |
