@@ -124,7 +124,7 @@ export function createNetlifyAuthResolver({ fetchImpl = globalThis.fetch, now = 
   }
 
   async function resolveOpenRouter(gatewayConfig) {
-    if (!gatewayConfig.netlifyUrl) {
+    if (gatewayConfig.openRouterApiKey || !gatewayConfig.netlifyUrl) {
       if (!gatewayConfig.openRouterBaseUrl) {
         throw openAiUpstreamAuthError(500, "未配置 OPENROUTER_BASE_URL，无法转发 OpenRouter 请求");
       }

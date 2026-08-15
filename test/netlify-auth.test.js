@@ -9,7 +9,7 @@ function makeConfig(overrides = {}) {
     upstreamBaseUrl: "https://demo.netlify.app/.netlify/ai/v1",
     upstreamApiKey: "static-key",
     openRouterBaseUrl: "https://demo.netlify.app/.netlify/ai/api/v1",
-    openRouterApiKey: "static-openrouter-key",
+    openRouterApiKey: "",
     netlifyKeyTtlMs: 300_000,
     netlifyConfigTimeoutMs: 1_000,
     ...overrides
@@ -82,10 +82,30 @@ test("OpenRouter 使用同一个动态 key 和 api/v1 前缀", async () => {
 test("OpenRouter 静态模式使用独立 base URL 和 API key", async () => {
   const resolver = createNetlifyAuthResolver();
 
-  const target = await resolver.resolveOpenRouter(makeConfig({ netlifyUrl: "" }));
+  const target = await resolver.resolveOpenRouter(makeConfig({ netlifyUrl: "", openRouterApiKey: "static-openrouter-key" }));
 
   assert.equal(target.baseUrl, "https://demo.netlify.app/.netlify/ai/api/v1");
   assert.equal(target.apiKey, "static-openrouter-key");
+  assert.equal(target.source, "static");
+});
+
+test("配置自有 OpenRouter key 时优先于 Netlify 动态 key", async () => {
+  let configCalls = 0;
+  const resolver = createNetlifyAuthResolver({
+    fetchImpl: async () => {
+      configCalls += 1;
+      throw new Error("不应请求 Netlify 配置");
+    }
+  });
+
+  const target = await resolver.resolveOpenRouter(makeConfig({
+    openRouterBaseUrl: "https://openrouter.ai/api/v1",
+    openRouterApiKey: "own-openrouter-key"
+  }));
+
+  assert.equal(configCalls, 0);
+  assert.equal(target.baseUrl, "https://openrouter.ai/api/v1");
+  assert.equal(target.apiKey, "own-openrouter-key");
   assert.equal(target.source, "static");
 });
 

@@ -102,11 +102,14 @@ function parseAdminStoreProvider(databaseUrl) {
 
 export function loadConfig() {
   const netlifyUrl = process.env.NETLIFY_URL ? trimTrailingSlash(process.env.NETLIFY_URL) : "";
+  const openRouterApiKey = process.env.OPENROUTER_API_KEY || "";
   const upstreamBaseUrl = trimTrailingSlash(
     process.env.UPSTREAM_BASE_URL || (netlifyUrl ? `${netlifyUrl}/.netlify/ai/v1` : "https://stellar-quokka-2fdb2f.netlify.app/.netlify/ai/v1")
   );
   const openRouterBaseUrl = process.env.OPENROUTER_BASE_URL
     ? trimTrailingSlash(process.env.OPENROUTER_BASE_URL)
+    : openRouterApiKey
+      ? "https://openrouter.ai/api/v1"
     : netlifyUrl
       ? `${netlifyUrl}/.netlify/ai/api/v1`
       : "";
@@ -124,7 +127,7 @@ export function loadConfig() {
     upstreamBaseUrl,
     upstreamApiKey: process.env.UPSTREAM_API_KEY || "",
     openRouterBaseUrl,
-    openRouterApiKey: process.env.OPENROUTER_API_KEY || "",
+    openRouterApiKey,
     gatewayApiKey: process.env.GATEWAY_API_KEY || "",
     adminUsername: process.env.ADMIN_USERNAME || "admin",
     adminPassword: process.env.ADMIN_PASSWORD || "",

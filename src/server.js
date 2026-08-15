@@ -996,20 +996,34 @@ export function createApp({ gatewayConfig = config, storage = createStorage(gate
         throw new HttpError(405, "OpenRouter 透传端点仅支持 GET 和 POST", { type: "invalid_request_error" });
       }
 
-      const upstreamPath = request.url.replace(/^\/+/, "");
-      if (!upstreamPath || upstreamPath.startsWith("?")) {
+      const requestedUpstreamPath = request.url.replace(/^\/+/, "");
+      if (!requestedUpstreamPath || requestedUpstreamPath.startsWith("?")) {
         throw new HttpError(404, "缺少 OpenRouter API 路径", { type: "invalid_request_error" });
       }
 
       let decodedPath;
       try {
-        decodedPath = decodeURIComponent(upstreamPath.split("?", 1)[0]);
+        decodedPath = decodeURIComponent(requestedUpstreamPath.split("?", 1)[0]);
       } catch {
         throw new HttpError(400, "OpenRouter API 路径编码无效", { type: "invalid_request_error" });
       }
       if (decodedPath.split("/").includes("..")) {
         throw new HttpError(400, "OpenRouter API 路径不能包含上级目录", { type: "invalid_request_error" });
       }
+
+      // OpenRouter's dedicated image API uses POST /images. Keep the native
+      // route untouched, while also accepting the familiar OpenAI-compatible
+      // /images/generations spelling for clients that cannot customize it.
+      const querySeparatorIndex = requestedUpstreamPath.indexOf("?");
+      const requestedPathname = querySeparatorIndex === -1
+        ? requestedUpstreamPath
+        : requestedUpstreamPath.slice(0, querySeparatorIndex);
+      const requestedQuery = querySeparatorIndex === -1
+        ? undefined
+        : requestedUpstreamPath.slice(querySeparatorIndex + 1);
+      const upstreamPath = request.method === "POST" && requestedPathname === "images/generations"
+        ? `images${requestedQuery === undefined ? "" : `?${requestedQuery}`}`
+        : requestedUpstreamPath;
 
       await sendPassthroughUpstreamResponse({
         upstreamPath,

@@ -124,6 +124,51 @@ curl http://localhost:3000/api/v1/chat/completions \
   }'
 ```
 
+图片生成使用 OpenRouter 独立 Image API。结果固定在 `data[].b64_json` 中返回，同时附带实际 `media_type`；`/api/v1/images/generations` 是本项目提供的兼容别名，会转发到同一个原生 `/images` 端点：
+
+```bash
+# 查看所有图片模型
+curl http://localhost:3000/api/v1/images/models \
+  -H "Authorization: Bearer $GATEWAY_API_KEY"
+
+# 查看 Seedream 5.0 Pro 的精确参数、供应商和价格
+curl http://localhost:3000/api/v1/images/models/bytedance-seed/seedream-5-0-pro/endpoints \
+  -H "Authorization: Bearer $GATEWAY_API_KEY"
+
+# 文生图；也可以把路径替换成 /api/v1/images/generations
+curl http://localhost:3000/api/v1/images \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bytedance-seed/seedream-5-0-pro",
+    "prompt": "A red paper boat on a calm pond, cinematic light",
+    "resolution": "1K",
+    "aspect_ratio": "1:1",
+    "n": 1
+  }'
+```
+
+Seedream 5.0 Pro 当前支持 `1K`/`2K`、一次生成 1 张、最多 14 张参考图片和可选 `seed`。参考图既可以直接使用 HTTP(S) URL 或 base64 data URL，也可以先上传到本项目，避免 base64 放大请求体：
+
+```bash
+REFERENCE_URL=$(curl -s http://localhost:3000/api/v1/assets \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -F "file=@reference.jpg" | jq -r .url)
+
+curl http://localhost:3000/api/v1/images \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"bytedance-seed/seedream-5-0-pro\",
+    \"prompt\": \"Preserve the subject and change the scene to a watercolor illustration\",
+    \"resolution\": \"1K\",
+    \"aspect_ratio\": \"1:1\",
+    \"input_references\": [
+      {\"type\": \"image_url\", \"image_url\": {\"url\": \"$REFERENCE_URL\"}}
+    ]
+  }"
+```
+
 视频生成使用 OpenRouter 的异步接口：
 
 ```bash
@@ -150,7 +195,7 @@ curl http://localhost:3000/api/v1/videos/JOB_ID/content?index=0 \
   --output output.mp4
 ```
 
-该前缀支持 `GET` 和 `POST`，例如模型目录可以通过 `GET /api/v1/models` 或 `GET /api/v1/videos/models` 获取。未配置 `NETLIFY_URL` 的静态模式需要设置 `OPENROUTER_BASE_URL` 和 `OPENROUTER_API_KEY`。
+该前缀支持 `GET` 和 `POST`，例如模型目录可以通过 `GET /api/v1/models`、`GET /api/v1/images/models` 或 `GET /api/v1/videos/models` 获取。未配置 `NETLIFY_URL` 的静态模式需要设置 `OPENROUTER_BASE_URL` 和 `OPENROUTER_API_KEY`。
 
 参考图片或视频应先使用 multipart 上传到临时存储，避免把大文件编码为 base64 后触发上游请求体限制：
 
@@ -216,8 +261,8 @@ curl http://localhost:3000/v1/images/generations \
 | `NETLIFY_CONFIG_TIMEOUT_SECONDS` | `15` | 请求 `/api/config` 的超时时间 |
 | `UPSTREAM_BASE_URL` | 示例 Netlify 地址 | 上游 OpenAI 兼容接口根路径，不含末尾 `/` |
 | `UPSTREAM_API_KEY` | 空 | 静态上游模式使用，会以 `Authorization: Bearer ...` 转发 |
-| `OPENROUTER_BASE_URL` | 根据 `NETLIFY_URL` 自动生成 | OpenRouter 原生 API 根路径；静态模式通常为 `https://openrouter.ai/api/v1` |
-| `OPENROUTER_API_KEY` | 空 | OpenRouter 静态模式 API key；动态 Netlify 模式复用 `gatewayKey` |
+| `OPENROUTER_BASE_URL` | 根据鉴权自动生成 | OpenRouter 原生 API 根路径；配置自有 key 时默认为 `https://openrouter.ai/api/v1` |
+| `OPENROUTER_API_KEY` | 空 | 可选的自有 OpenRouter key；配置后 `/api/v1/*` 优先直连 OpenRouter，避免 Netlify 托管 key 的模型或隐私策略限制 |
 | `PUBLIC_BASE_URL` | 空 | 临时图片公网根地址 |
 | `GATEWAY_API_KEY` | 空 | 网关自己的访问密钥 |
 | `ADMIN_USERNAME` | `admin` | 管理台 Basic Auth 用户名 |

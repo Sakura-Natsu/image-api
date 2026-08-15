@@ -162,6 +162,131 @@ test("OpenRouter GET 会保留路径和查询参数", async () => {
   }
 });
 
+test("OpenRouter 原生图片 API 会原样透传 Seedream 请求和 base64 响应", async () => {
+  const server = await makeServer();
+  const originalFetch = globalThis.fetch;
+  let upstreamBody = null;
+  const imageResponse = {
+    created: 1_786_721_536,
+    data: [{ b64_json: "dGVzdC1pbWFnZQ==", media_type: "image/jpeg" }],
+    usage: { total_tokens: 4118, cost: 0.045 }
+  };
+
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "https://upstream.example/api/v1/images");
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers.authorization, "Bearer openrouter-upstream-key");
+    upstreamBody = JSON.parse(options.body);
+
+    return new Response(JSON.stringify(imageResponse), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  const requestBody = {
+    model: "bytedance-seed/seedream-5-0-pro",
+    prompt: "A red paper boat",
+    resolution: "1K",
+    aspect_ratio: "1:1",
+    n: 1,
+    input_references: [
+      { type: "image_url", image_url: { url: "https://gateway.example/uploads/reference.jpg" } }
+    ]
+  };
+
+  try {
+    const response = await originalFetch(`${server.url}/api/v1/images`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer global-gateway-key",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(upstreamBody, requestBody);
+    assert.deepEqual(await response.json(), imageResponse);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await server.close();
+  }
+});
+
+test("OpenRouter 图片模型目录和单模型端点路径会原样透传", async () => {
+  const server = await makeServer();
+  const originalFetch = globalThis.fetch;
+  const requestedUrls = [];
+
+  globalThis.fetch = async (url, options) => {
+    requestedUrls.push(url);
+    assert.equal(options.method, "GET");
+    return new Response(JSON.stringify({ id: "bytedance-seed/seedream-5-0-pro" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  try {
+    for (const pathname of [
+      "/api/v1/images/models",
+      "/api/v1/images/models/bytedance-seed/seedream-5-0-pro/endpoints"
+    ]) {
+      const response = await originalFetch(`${server.url}${pathname}`, {
+        headers: { authorization: "Bearer global-gateway-key" }
+      });
+      assert.equal(response.status, 200);
+    }
+
+    assert.deepEqual(requestedUrls, [
+      "https://upstream.example/api/v1/images/models",
+      "https://upstream.example/api/v1/images/models/bytedance-seed/seedream-5-0-pro/endpoints"
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await server.close();
+  }
+});
+
+test("OpenRouter 图片 generations 兼容路径会映射到原生 images 端点", async () => {
+  const server = await makeServer();
+  const originalFetch = globalThis.fetch;
+  let upstreamBody = null;
+
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "https://upstream.example/api/v1/images?trace=1");
+    upstreamBody = JSON.parse(options.body);
+    return new Response(JSON.stringify({ data: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  const requestBody = {
+    model: "bytedance-seed/seedream-5-0-pro",
+    prompt: "test",
+    size: "1K"
+  };
+
+  try {
+    const response = await originalFetch(`${server.url}/api/v1/images/generations?trace=1`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer global-gateway-key",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(upstreamBody, requestBody);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await server.close();
+  }
+});
+
 test("OpenRouter 视频任务链接会改写成本项目地址", async () => {
   const server = await makeServer();
   const originalFetch = globalThis.fetch;
